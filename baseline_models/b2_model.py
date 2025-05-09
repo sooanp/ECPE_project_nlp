@@ -12,20 +12,29 @@ from transformers import GPT2TokenizerFast
 import pickle
 import os
 
-import extractor
+from utils import load_conversation_data, build_pair_examples
 
 # Set device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
-df = extractor.text_emo_for_bert("./data/ecf/train.json")
+df = load_conversation_data("./data/ecf/train_with_cause.json")
+
 # Convert labels to numeric format
 le = LabelEncoder()
-df['label_numeric'] = le.fit_transform(df['label'])
+df['label_emo'] = le.fit_transform(df['emotion'])
+
+# Cause to int
+df['label_cause'] = df['cause'].astype(int)
 
 # Split data into train and test sets
-X_train, X_test, y_train, y_test = train_test_split(
-    df['text'].values, df['label_numeric'].values, test_size=0.2, random_state=42, stratify=df['label_numeric']
+X_train, X_test, y_emo_train, y_emo_test, y_cau_train, y_cau_test = train_test_split(
+    df['text'].values,
+    df['label_emo'].values,
+    df['label_cause'].values,
+    test_size=0.2,
+    random_state=42,
+    stratify=df['label_emo']
 )
 
 # Load BPE (GPT2) tokenizer
@@ -52,10 +61,8 @@ class EmotionDataset(Dataset):
         return len(self.texts)
 
     def __getitem__(self, idx):
-        text = self.texts[idx]
-        label = self.labels[idx]
         encoding = self.tokenizer.encode_plus(
-            text,
+            self.texts[idx],
             add_special_tokens=True,
             max_length=self.max_len,
             padding='max_length',
@@ -66,17 +73,22 @@ class EmotionDataset(Dataset):
         input_ids = encoding['input_ids'].squeeze(0)
         return {
             'input_ids': input_ids,
-            'label': torch.tensor(label, dtype=torch.long)
+            'label': torch.tensor(self.labels[idx], dtype=torch.long)
         }
 
 batch_size = 16
-train_ds = EmotionDataset(X_train, y_train, tokenizer, max_len=128)
-test_ds  = EmotionDataset(X_test,  y_test,  tokenizer, max_len=128)
-train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
-test_loader  = DataLoader(test_ds,  batch_size=batch_size)
+emo_train_ds = EmotionDataset(X_train, y_emo_train, tokenizer, max_len)
+emo_test_ds  = EmotionDataset(X_test,  y_emo_test,  tokenizer, max_len)
+cau_train_ds = EmotionDataset(X_train, y_cau_train, tokenizer, max_len)
+cau_test_ds  = EmotionDataset(X_test,  y_cau_test,  tokenizer, max_len)
+
+emo_train_loader = DataLoader(emo_train_ds, batch_size=batch_size, shuffle=True)
+emo_test_loader  = DataLoader(emo_test_ds,  batch_size=batch_size)
+cau_train_loader = DataLoader(cau_train_ds, batch_size=batch_size, shuffle=True)
+cau_test_loader  = DataLoader(cau_test_ds,  batch_size=batch_size)
 
 # ========== 3. LSTM Emotion Classifier ==========
-class LSTMEmotionClassifier(nn.Module):
+class LSTMClassifier(nn.Module):
     def __init__(self, vocab_size, embed_dim, hidden_dim, num_classes, pad_idx):
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, embed_dim, padding_idx=pad_idx)
@@ -86,21 +98,23 @@ class LSTMEmotionClassifier(nn.Module):
 
     def forward(self, input_ids):
         lengths = (input_ids != pad_idx).sum(dim=1)
-        x = self.embedding(input_ids)  # [B, L, E]
+        x = self.embedding(input_ids)
         packed = nn.utils.rnn.pack_padded_sequence(x, lengths.cpu(), batch_first=True, enforce_sorted=False)
-        out_packed, _ = self.lstm(packed)
-        out, _ = nn.utils.rnn.pad_packed_sequence(out_packed, batch_first=True)
-        idx = (lengths - 1).view(-1,1).expand(len(lengths), out.size(2)).unsqueeze(1)
-        last_hidden = out.gather(1, idx).squeeze(1)  # [B, hidden*2]
+        out_p, _ = self.lstm(packed)
+        out, _ = nn.utils.rnn.pad_packed_sequence(out_p, batch_first=True)
+        idx = (lengths-1).view(-1,1,1).expand(-1,1,out.size(2))
+        last_hidden = out.gather(1, idx).squeeze(1)
         logits = self.fc(self.dropout(last_hidden))
         return logits
 
-num_classes = len(le.classes_)
-model = LSTMEmotionClassifier(vocab_size, embed_dim=128, hidden_dim=128,
-                              num_classes=num_classes, pad_idx=pad_idx).to(device)
+# Instantiate emotion & cause classifiers
+num_emo_classes = len(le.classes_)
+model_emo = LSTMClassifier(vocab_size, 128, 128, num_emo_classes, pad_idx).to(device)
+model_cau = LSTMClassifier(vocab_size, 128, 128, 2, pad_idx).to(device)
 
-optimizer = AdamW(model.parameters(), lr=1e-3)
-loss_fn   = nn.CrossEntropyLoss()
+optimizer_emo = AdamW(model_emo.parameters(), lr=1e-3)
+optimizer_cau = AdamW(model_cau.parameters(), lr=1e-3)
+loss_fn = nn.CrossEntropyLoss()
 
 # ========== 4. Training & Evaluation ==========
 def train_epoch(model, loader, optimizer, loss_fn):
@@ -130,46 +144,129 @@ def eval_model(model, loader):
             trues.extend(labels.cpu().tolist())
     return preds, trues
 
-epochs = 30
+epochs = 5
 for epoch in range(1, epochs+1):
-    loss = train_epoch(model, train_loader, optimizer, loss_fn)
-    print(f"[Epoch {epoch}/{epochs}] train loss: {loss:.4f}")
+    loss_e = train_epoch(model_emo, emo_train_loader, optimizer_emo, loss_fn)
+    loss_c = train_epoch(model_cau, cau_train_loader, optimizer_cau, loss_fn)
+    print(f"[Epoch {epoch}/{epochs}] Emo Loss: {loss_e:.4f} | Cau Loss: {loss_c:.4f}")
 
-preds, trues = eval_model(model, test_loader)
-print("\nClassification Report:")
-print(classification_report(trues, preds, target_names=le.classes_))
-print("Confusion Matrix:")
-print(confusion_matrix(trues, preds))
+emo_preds, emo_trues = eval_model(model_emo, emo_test_loader)
+cau_preds, cau_trues = eval_model(model_cau, cau_test_loader)
 
-# ========== 5. Inference ==========
-def predict_emotion(text: str, model, tokenizer, le, max_len=128):
-    model.eval()
-    encoding = tokenizer.encode_plus(
-        text,
-        add_special_tokens=True,
-        max_length=max_len,
-        padding='max_length',
-        truncation=True,
-        return_tensors='pt'
+print("\nEmotion Classification Report")
+print(classification_report(emo_trues, emo_preds, target_names=le.classes_))
+print("Cause Classification Report")
+print(classification_report(cau_trues, cau_preds, target_names=['no_cause','cause']))
+
+# ========== 6. Cartesian Product of Predicted Clauses ==========
+def cartesian_pairs(emotions, causes):
+    from itertools import product
+    return list(product(emotions, causes))
+
+# Inference: collect predicted emotion & cause clauses
+model_emo.eval()
+model_cau.eval()
+emo_clauses, cau_clauses = [], []
+
+with torch.no_grad():
+    for text in df['text'].values:
+        enc = tokenizer.encode_plus(
+            text, add_special_tokens=True,
+            max_length=max_len, padding='max_length',
+            truncation=True, return_tensors='pt'
+        )
+        input_ids = enc['input_ids'].to(device)
+        # emotion pred
+        log_emo = model_emo(input_ids)
+        if log_emo.argmax(1).item() > 0:
+            emo_clauses.append({'text': text})
+        # cause pred
+        log_cau = model_cau(input_ids)
+        if log_cau.argmax(1).item() == 1:
+            cau_clauses.append({'text': text})
+
+all_pairs = cartesian_pairs(emo_clauses, cau_clauses)
+print(f"Total candidate pairs: {len(all_pairs)}")
+
+X_pf, y_pf = build_pair_examples('./data/ecf/train.json', neg_ratio=1)
+Xp_train, Xp_test, yp_train, yp_test = train_test_split(
+    X_pf, y_pf, test_size=0.2, random_state=42, stratify=y_pf
+)
+
+class PairDataset(Dataset):
+    def __init__(self, texts, labels, tokenizer, max_len):
+        self.texts = texts
+        self.labels = labels
+        self.tokenizer = tokenizer
+        self.max_len = max_len
+    def __len__(self): return len(self.texts)
+    def __getitem__(self, idx):
+        enc = self.tokenizer.encode_plus(
+            self.texts[idx],
+            add_special_tokens=True,
+            max_length=self.max_len,
+            padding='max_length',
+            truncation=True,
+            return_tensors='pt'
+        )
+        return {
+            'input_ids': enc['input_ids'].squeeze(0),
+            'label': torch.tensor(self.labels[idx], dtype=torch.long)
+        }
+
+pf_train_ds = PairDataset(Xp_train, yp_train, tokenizer, max_len)
+pf_test_ds  = PairDataset(Xp_test,  yp_test,  tokenizer, max_len)
+pf_train_loader = DataLoader(pf_train_ds, batch_size=batch_size, shuffle=True)
+pf_test_loader  = DataLoader(pf_test_ds,  batch_size=batch_size)
+
+# instantiate filter model
+model_filter = LSTMClassifier(vocab_size, 128, 128, 2, pad_idx).to(device)
+opt_filt = AdamW(model_filter.parameters(), lr=1e-3)
+
+# train filter
+for epoch in range(1, epochs+1):
+    loss_f = train_epoch(model_filter, pf_train_loader, opt_filt, loss_fn)
+    print(f"[Filter Epoch {epoch}/{epochs}] Loss: {loss_f:.4f}")
+
+# evaluate filter
+pf_preds, pf_trues = eval_model(model_filter, pf_test_loader)
+print("\nFilter Classification Report")
+print(classification_report(pf_trues, pf_preds, target_names=['invalid','valid']))
+
+# ========== 8. Final Inference Pipeline ==========
+def find_emotion_cause_pairs(texts):
+    # predict emotion & cause clauses
+    emo_list, cau_list = [], []
+    for t in texts:
+        enc = tokenizer.encode_plus(
+            t, add_special_tokens=True,
+            max_length=max_len, padding='max_length',
+            truncation=True, return_tensors='pt'
+        )
+        ids = enc['input_ids'].to(device)
+        if model_emo(ids).argmax(1).item() > 0:
+            emo_list.append(t)
+        if model_cau(ids).argmax(1).item() == 1:
+            cau_list.append(t)
+    # cartesian
+    candidates = cartesian_pairs(
+        [{'text':e} for e in emo_list],
+        [{'text':c} for c in cau_list]
     )
-    input_ids = encoding['input_ids'].to(device)
-    with torch.no_grad():
-        logits = model(input_ids)
-        _, pred = torch.max(logits, dim=1)
-    return le.inverse_transform([pred.item()])[0]
+    # filter
+    valid = []
+    for e,c in candidates:
+        pair_text = e['text'] + ' <SEP> ' + c['text']
+        enc = tokenizer.encode_plus(
+            pair_text, add_special_tokens=True,
+            max_length=max_len, padding='max_length',
+            truncation=True, return_tensors='pt'
+        )
+        pred = model_filter(enc['input_ids'].to(device)).argmax(1).item()
+        if pred == 1:
+            valid.append((e['text'], c['text']))
+    return valid
 
-# ========== 6. Save Artifacts ==========
-save_dir = "./saved_models/lstm_emotion_gpt2"
-os.makedirs(save_dir, exist_ok=True)
-torch.save(model.state_dict(), f"{save_dir}/model_state_dict.pt")
-tokenizer.save_pretrained(save_dir)
-with open(f"{save_dir}/label_encoder.pkl", "wb") as f:
-    pickle.dump(le, f)
-meta = {"num_classes": num_classes, "pad_idx": pad_idx, "max_len": max_len}
-with open(f"{save_dir}/metadata.pkl", "wb") as f:
-    pickle.dump(meta, f)
-print(f"Artifacts saved to {save_dir}")
-
-# ========== 7. Usage Example ==========
-for sent in ["I feel ecstatic today!", "This is so frustrating..."]:
-    print(f"'{sent}' →", predict_emotion(sent, model, tokenizer, le))
+# usage
+valid_pairs = find_emotion_cause_pairs(list(df['text'].head(10).values))
+print("Valid emotion–cause pairs:", valid_pairs)
