@@ -4,50 +4,18 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from transformers import BertTokenizer, BertModel
-from torch.optim import AdamW  # Import AdamW from torch.optim instead
+from torch.optim import AdamW 
 from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, confusion_matrix
+
+import extractor
 
 # Set device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
-# Sample data
-data = {
-    "text": [
-        "I am so happy with my results!",
-        "I feel sad about the outcome.",
-        "This makes me angry.",
-        "It's just an ordinary day.",
-        "I am disgusted by the situation."
-    ],
-    "label": ["joy", "sadness", "anger", "neutral", "disgust"]
-}
-
-# Create DataFrame
-df = pd.DataFrame(data)
-
-# Create more samples to have a more robust dataset
-additional_texts = [
-    "I'm feeling great today!", "Today was a wonderful day", "I won the competition", "I'm so excited about the trip",
-    "I miss my old friends", "The news made me cry", "I lost my favorite book", "Nothing feels right today",
-    "I hate when people lie to me", "The service was terrible", "I can't believe they did this to me", "Stop bothering me",
-    "I don't really care either way", "Average day, nothing special", "I have no strong feelings about it", "It is what it is",
-    "That smells awful", "I couldn't stand the sight", "The garbage was revolting", "That makes me sick"
-]
-
-additional_labels = [
-    "joy", "joy", "joy", "joy",
-    "sadness", "sadness", "sadness", "sadness",
-    "anger", "anger", "anger", "anger",
-    "neutral", "neutral", "neutral", "neutral",
-    "disgust", "disgust", "disgust", "disgust"
-]
-
-# Add additional data
-df = pd.concat([df, pd.DataFrame({"text": additional_texts, "label": additional_labels})], ignore_index=True)
-
+df = extractor.text_emo_for_bert("./data/ecf/train.json")
 # Convert labels to numeric format
 le = LabelEncoder()
 df['label_numeric'] = le.fit_transform(df['label'])
