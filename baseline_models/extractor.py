@@ -6,7 +6,7 @@ from transformers import BertTokenizer
 from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import train_test_split
 
-def load_json_data(file_path):
+def load_json_data(file_path, rtype):
     # Load JSON data
     with open(file_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
@@ -14,23 +14,37 @@ def load_json_data(file_path):
     # Extract text and emotion from each utterance in each conversation
     texts = []
     emotions = []
+    causes = []
     
     for conversation in data:
         for utterance in conversation['conversation']:
             texts.append(utterance['text'])
             emotions.append(utterance['emotion'])
+            causes.append(utterance['cause'])
     
-    # Create DataFrame
     df = pd.DataFrame({
         'text': texts,
         'label': emotions
     })
     
+    df2 = pd.DataFrame({
+        'text': texts,
+        'label': causes
+    })
+    if rtype == 'emo':
+      return df
+    return df2
+
+# load data for text & emo
+def text_emo_for_bert(json_file_path):
+    df = load_json_data(json_file_path, 'emo')
     return df
 
-def text_emo_for_bert(json_file_path):
-    df = load_json_data(json_file_path)
+# load data for text & cause
+def text_cause_for_bert(json_file_path):
+    df = load_json_data(json_file_path, 'cause')
     return df
+
 
 def prepare_data_for_bert(json_file_path, random_state=42):
     # Load data
@@ -62,7 +76,6 @@ def prepare_data_for_bert(json_file_path, random_state=42):
         'label_encoder': le
     }
 
-# Example usage
 if __name__ == "__main__":
     json_file_path = "./data/ecf/train.json"
     

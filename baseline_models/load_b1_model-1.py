@@ -2,75 +2,13 @@ import torch
 import torch.nn as nn
 from transformers import BertTokenizer, BertModel
 import pickle
+from b1_model import BERTEmotionClassifier
 
-# Define the Emotion Classification model using BERT (same as in training script)
-class BERTEmotionClassifier(nn.Module):
-    def __init__(self, num_classes):
-        super(BERTEmotionClassifier, self).__init__()
-        self.bert = BertModel.from_pretrained('bert-base-uncased')
-        self.dropout = nn.Dropout(0.1)
-        self.fc = nn.Linear(self.bert.config.hidden_size, num_classes)
-        
-    def forward(self, input_ids, attention_mask):
-        outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
-        pooled_output = outputs.pooler_output
-        x = self.dropout(pooled_output)
-        logits = self.fc(x)
-        return logits
 
-def load_emotion_classifier(model_dir='./saved_models/emotion_classifier_model'):
-    """
-    Load the saved BERT emotion classifier model and return all necessary components
-    for making predictions.
-    
-    Args:
-        model_dir (str): Directory where the model files are saved
-        
-    Returns:
-        model: Loaded BERT emotion classifier model
-        tokenizer: BERT tokenizer
-        le: Label encoder for emotion classes
-    """
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
-    # Load metadata
-    with open(f'{model_dir}/metadata.pkl', 'rb') as f:
-        metadata = pickle.load(f)
-    
-    # Get number of classes
-    num_classes = metadata['num_classes']
-    
-    # Initialize the model
-    model = BERTEmotionClassifier(num_classes)
-    
-    # Load model state dict
-    model.load_state_dict(torch.load(f'{model_dir}/model_state_dict.pt', map_location=device))
-    model = model.to(device)
-    model.eval()  # Set to evaluation mode
-    
-    # Load the tokenizer
-    tokenizer = BertTokenizer.from_pretrained(model_dir)
-    
-    # Load the label encoder
-    with open(f'{model_dir}/label_encoder.pkl', 'rb') as f:
-        le = pickle.load(f)
-    
-    return model, tokenizer, le
-
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# Function to predict emotions for new sentences
 def predict_emotion(text, model, tokenizer, le):
-    """
-    Predict the emotion for a given text using the loaded model.
-    
-    Args:
-        text (str): Input text to classify
-        model: Loaded BERT emotion classifier model
-        tokenizer: BERT tokenizer
-        le: Label encoder for emotion classes
-        
-    Returns:
-        str: Predicted emotion class
-    """
-    device = model.bert.device
+    model.eval()
     
     encoding = tokenizer.encode_plus(
         text,
@@ -91,6 +29,44 @@ def predict_emotion(text, model, tokenizer, le):
     
     predicted_class = le.inverse_transform([preds.item()])[0]
     return predicted_class
+
+# Function to load the saved model and make predictions
+def load_emotion_classifier(model_dir='emotion_classifier_model'):
+    """
+    Load the saved BERT emotion classifier model and return all necessary components
+    for making predictions.
+    
+    Args:
+        model_dir (str): Directory where the model files are saved
+        
+    Returns:
+        model: Loaded BERT emotion classifier model
+        tokenizer: BERT tokenizer
+        le: Label encoder for emotion classes
+    """
+    
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    # Load the saved model state
+    checkpoint = torch.load(f'{model_dir}/bert_emotion_classifier.pth', map_location=device)
+    
+    # Load the tokenizer
+    tokenizer = BertTokenizer.from_pretrained(model_dir)
+    
+    # Load the label encoder
+    with open(f'{model_dir}/label_encoder.pkl', 'rb') as f:
+        le = pickle.load(f)
+    
+    # Initialize the model with the right number of classes
+    num_classes = checkpoint['num_classes']
+    model = BERTEmotionClassifier(num_classes)
+    
+    # Load the model state
+    model.load_state_dict(checkpoint['model_state_dict'])
+    model = model.to(device)
+    model.eval()  # Set to evaluation mode
+    
+    return model, tokenizer, le
 
 # Example usage
 if __name__ == "__main__":
