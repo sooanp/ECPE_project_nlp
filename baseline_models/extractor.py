@@ -1,13 +1,7 @@
 import json
 import pandas as pd
-import torch
-from torch.utils.data import Dataset, DataLoader
-from transformers import BertTokenizer
-from sklearn.preprocessing import LabelEncoder
-from sklearn.model_selection import train_test_split
-
+import re
 def load_json_data(file_path, rtype):
-    # Load JSON data
     with open(file_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
     
@@ -46,52 +40,36 @@ def text_cause_for_bert(json_file_path):
     return df
 
 
-def prepare_data_for_bert(json_file_path, random_state=42):
-    # Load data
-    df = load_json_data(json_file_path)
-    
-    # Print dataset statistics
-    print(f"Dataset loaded successfully with {len(df)} utterances")
-    print("\nEmotion distribution:")
-    print(df['label'].value_counts())
-    
-    # Convert emotions to numeric format
-    le = LabelEncoder()
-    df['emotion_numeric'] = le.fit_transform(df['label'])
-    
-    # Split data
-    X_train, X_test, y_train, y_test = train_test_split(
-        df['text'].values, 
-        df['emotion_numeric'].values, 
-        random_state=random_state,
-        stratify=df['emotion_numeric']  # Maintain emotion distribution in train/test splits
-    )
-    
-    return {
-        'df': df,
-        'X_train': X_train,
-        'X_test': X_test,
-        'y_train': y_train,
-        'y_test': y_test,
-        'label_encoder': le
-    }
+# Get conversation [u_1, u_2, ... u_n] ans [[e_1, c_1]....] as labels
+# u is utterance and e, c are utterance ID for each emotions and causes
+def conv_pair_for_bert(json_file_path):
+      with open(json_file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
 
-if __name__ == "__main__":
-    json_file_path = "./data/ecf/train.json"
-    
-    # Load and prepare data
-    processed_data = prepare_data_for_bert(json_file_path)
-    
-    
-    # Print sample information
-    print(f"\nNumber of training samples: {len(processed_data['X_train'])}")
-    print(f"Number of testing samples: {len(processed_data['X_test'])}")
-    print(f"Emotion classes: {list(processed_data['label_encoder'].classes_)}")
+      conversation_list = []
+      label_pairs = []
 
-    # Print a few examples
-    print("\nSample utterances:")
-    for i in range(min(5, len(processed_data['df']))):
-        text = processed_data['df']['text'].iloc[i]
-        emotion = processed_data['df']['label'].iloc[i]
-        print(f"Text: '{text}'")
-        print(f"Emotion: {emotion}\n")
+      for conversation in data:
+            conv_utts = [utt['text'] for utt in conversation['conversation']]
+            pairs = conversation.get('emotion-cause_pairs', [])
+
+            # Convert string pairs
+            pattern = r'\d+'
+            processed_pairs = []
+            for e,c in pairs:
+                e_id = int(re.match(pattern, e).group())
+                c_id = int(re.match(pattern, c).group())
+                processed_pairs.append([e_id, c_id])
+            
+            conversation_list.append(conv_utts)
+            label_pairs.append(processed_pairs)
+
+      return conversation_list, label_pairs
+
+# def main():
+#     c, l = conv_pair_for_bert("./data/ecf/train_with_cause.json")
+#     print(c[:1])
+#     print(l[:1])
+
+# if __name__== "__main__":
+#     main()

@@ -1,5 +1,4 @@
 import numpy as np
-import pandas as pd
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
@@ -12,17 +11,17 @@ import pickle
 import extractor
 from customDataClass import EmotionDataset, CauseDataset
 
-# Set device
+# Set device and directories
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 train_dir = "./data/ecf/train_with_cause.json"
 test_dir = "./data/ecf/test_with_cause.json"
 print(f"Using device: {device}")
 
-# emo data
+# emo data (text & emotion)
 emo_train_data = extractor.text_emo_for_bert(train_dir)
 emo_test_data = extractor.text_emo_for_bert(test_dir)
 
-# cause data
+# cause data (text & cause)
 cause_train_data = extractor.text_cause_for_bert(train_dir)
 cause_test_data = extractor.text_cause_for_bert(test_dir)
 
@@ -51,7 +50,7 @@ emo_test_dataset = EmotionDataset(X_test_emo, y_test_emo, tokenizer)
 cause_train_dataset = CauseDataset(X_train_cause, y_train_cause, tokenizer)
 cause_test_dataset = CauseDataset(X_test_cause, y_test_causeo, tokenizer)
 
-batch_size = 8
+batch_size = 10
 emo_train_dataloader = DataLoader(emo_train_dataset, batch_size=batch_size, shuffle=True)
 emo_test_dataloader = DataLoader(emo_test_dataset, batch_size=batch_size)
 cause_train_dataloader = DataLoader(cause_train_dataset, batch_size=batch_size, shuffle=True)
@@ -65,10 +64,14 @@ class BERTEmotionClassifier(nn.Module):
         self.dropout = nn.Dropout(0.1)
         self.fc = nn.Linear(self.bert.config.hidden_size, num_classes)
         
-    def forward(self, input_ids, attention_mask):
+    def forward(self, input_ids, attention_mask, return_features=False):
         outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
+        
         pooled_output = outputs.pooler_output
+
         x = self.dropout(pooled_output)
+        if return_features:
+            return x
         logits = self.fc(x)
         return logits
     
@@ -81,10 +84,12 @@ class BERTCauseClassifier(nn.Module):
         # Label will be 0 or 1, so output 2
         self.fc = nn.Linear(self.bert.config.hidden_size, 2)
         
-    def forward(self, input_ids, attention_mask):
+    def forward(self, input_ids, attention_mask, return_features=False):
         outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
         pooled_output = outputs.pooler_output
         x = self.dropout(pooled_output)
+        if return_features:
+            return x
         logits = self.fc(x)
         return logits
 
@@ -100,7 +105,7 @@ cause_model = cause_model.to(device)
 # Training parameters
 optimizer = AdamW(emo_model.parameters(), lr=2e-5)
 loss_fn = nn.CrossEntropyLoss()
-epochs = 1  # Reduced for demonstration
+epochs = 3
 
 # Training function
 def train_model(model, dataloader, optimizer, loss_fn, device):
@@ -144,57 +149,63 @@ def evaluate_model(model, dataloader, device):
     
     return predictions, actual_labels
 
-# Train the model
-# print("Training the emotion model...")
-# for epoch in range(epochs):
-#     train_loss = train_model(emo_model, emo_train_dataloader, optimizer, loss_fn, device)
-#     print(f"Epoch {epoch+1}/{epochs}, Loss: {train_loss:.4f}")
 
-print("Training the cause model...")
-for epoch in range(epochs):
-    train_loss = train_model(cause_model, cause_train_dataloader, optimizer, loss_fn, device)
-    print(f"Epoch {epoch+1}/{epochs}, Loss: {train_loss:.4f}")
+if __name__ == "__main__":
+        
+    # Train models
+    print("Training the emotion model...")
+    for epoch in range(epochs):
+        train_loss = train_model(emo_model, emo_train_dataloader, optimizer, loss_fn, device)
+        print(f"Epoch {epoch+1}/{epochs}, Loss: {train_loss:.4f}")
 
-# Evaluate the model
-# print("\nEvaluating the emotion model...")
-# emo_predictions, emo_actual_labels = evaluate_model(emo_model, emo_test_dataloader, device)
+    print("Training the cause model...")
+    for epoch in range(epochs):
+        train_loss = train_model(cause_model, cause_train_dataloader, optimizer, loss_fn, device)
+        print(f"Epoch {epoch+1}/{epochs}, Loss: {train_loss:.4f}")
 
-print("\nEvaluating the cause model...")
-cause_predictions, cause_actual_labels = evaluate_model(cause_model, cause_test_dataloader, device)
+    # Evaluate models
+    print("\nEvaluating the emotion model...")
+    emo_predictions, emo_actual_labels = evaluate_model(emo_model, emo_test_dataloader, device)
 
-# # Print metrics
-# print("\nEmotion Classification Report:")
-# print(classification_report(emo_actual_labels, emo_predictions, target_names=le.classes_))
+    print("\nEvaluating the cause model...")
+    cause_predictions, cause_actual_labels = evaluate_model(cause_model, cause_test_dataloader, device)
 
-print("\nCause Classification Report:")
-print(classification_report(cause_actual_labels, cause_predictions))
+    # Classification Report
+    print("\nEmotion Classification Report:")
+    print(classification_report(emo_actual_labels, emo_predictions, target_names=le.classes_))
+
+    print("\nCause Classification Report:")
+    print(classification_report(cause_actual_labels, cause_predictions))
 
 
 
-# # Save the model, tokenizer, and label encoder in a more compatible way
-# print("\nSaving the model...")
-# save_directory = './saved_models/emotion_classifier_model'
+    # Save Emotion Model
+    print("\nSaving the emotion model...")
+    emo_save_directory = './saved_models/BERT_emo_model'
+    os.makedirs(emo_save_directory, exist_ok=True)
 
-# # Create directory if it doesn't exist
-# if not os.path.exists(save_directory):
-#     os.makedirs(save_directory)
+    torch.save(emo_model.state_dict(), f'{emo_save_directory}/model_state_dict.pt')
 
-# # Save model state dict separately to avoid pickling issues
-# torch.save(model.state_dict(), f'{save_directory}/model_state_dict.pt')
+    emo_metadata = {
+        'num_classes': num_classes,
+        'label_encoder_classes': le.classes_
+    }
+    with open(f'{emo_save_directory}/metadata.pkl', 'wb') as f:
+        pickle.dump(emo_metadata, f)
 
-# # Save other metadata separately using pickle
-# metadata = {
-#     'num_classes': num_classes,
-#     'label_encoder_classes': le.classes_
-# }
-# with open(f'{save_directory}/metadata.pkl', 'wb') as f:
-#     pickle.dump(metadata, f)
+    with open(f'{emo_save_directory}/label_encoder.pkl', 'wb') as f:
+        pickle.dump(le, f)
 
-# # Save the tokenizer
-# tokenizer.save_pretrained(save_directory)
+    tokenizer.save_pretrained(emo_save_directory)
+    print(f"Emotion model saved to '{emo_save_directory}'")
 
-# # Save the label encoder
-# with open(f'{save_directory}/label_encoder.pkl', 'wb') as f:
-#     pickle.dump(le, f)
+    # Save Cause Model
+    print("\nSaving the cause model...")
+    cause_save_directory = './saved_models/BERT_cause_model'
+    os.makedirs(cause_save_directory, exist_ok=True)
 
-# print(f"Model, tokenizer, and label encoder saved to '{save_directory}' directory")
+    torch.save(cause_model.state_dict(), f'{cause_save_directory}/model_state_dict.pt')
+
+    # Cause model does not need label encoder
+    tokenizer.save_pretrained(cause_save_directory)
+    print(f"Cause model saved to '{cause_save_directory}'")
