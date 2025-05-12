@@ -10,7 +10,7 @@ import itertools
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 import extractor
 from tqdm import tqdm
-
+from torch.optim import AdamW 
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -220,10 +220,10 @@ if __name__ == "__main__":
     pos_weight = torch.tensor([pos_weight_val], device=device)
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
-    optimizer = torch.optim.Adam(final_model.parameters(), lr=1e-4)
+    optimizer = AdamW(final_model.parameters(), lr=1e-4)
 
     final_model.train()
-    num_epochs = 5
+    num_epochs = 20
 
     print("Training final linear layer for Pair Extraction...")
     for epoch in range(num_epochs):

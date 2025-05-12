@@ -106,7 +106,7 @@ cause_model = cause_model.to(device)
 # Training parameters
 optimizer = AdamW(emo_model.parameters(), lr=2e-5)
 loss_fn = nn.CrossEntropyLoss()
-epochs = 4
+epochs = 20
 
 # Training function
 def train_model(model, dataloader, optimizer, loss_fn, device):

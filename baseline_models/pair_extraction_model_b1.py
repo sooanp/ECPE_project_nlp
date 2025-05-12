@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from transformers import BertTokenizer
+from torch.optim import AdamW 
 import pickle
 from b1_model import BERTEmotionClassifier, BERTCauseClassifier
 import itertools
@@ -206,10 +207,10 @@ if __name__ == "__main__":
     pos_weight = torch.tensor([pos_weight_val], device=device)
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
-    optimizer = torch.optim.Adam(final_model.parameters(), lr=1e-4)
+    optimizer = AdamW(final_model.parameters(), lr=1e-4)
 
     final_model.train()
-    num_epochs = 5
+    num_epochs = 20
 
     print("Training final linear layer for Pair Extraction...")
     for epoch in range(num_epochs):
