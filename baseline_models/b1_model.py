@@ -11,6 +11,7 @@ import pickle
 import extractor
 from customDataClass import EmotionDataset, CauseDataset
 
+
 # Set device and directories
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 train_dir = "./data/ecf/train_with_cause.json"
@@ -71,7 +72,7 @@ class BERTEmotionClassifier(nn.Module):
 
         x = self.dropout(pooled_output)
         if return_features:
-            return x
+            return pooled_output
         logits = self.fc(x)
         return logits
     
@@ -89,7 +90,7 @@ class BERTCauseClassifier(nn.Module):
         pooled_output = outputs.pooler_output
         x = self.dropout(pooled_output)
         if return_features:
-            return x
+            return pooled_output
         logits = self.fc(x)
         return logits
 
@@ -105,7 +106,7 @@ cause_model = cause_model.to(device)
 # Training parameters
 optimizer = AdamW(emo_model.parameters(), lr=2e-5)
 loss_fn = nn.CrossEntropyLoss()
-epochs = 3
+epochs = 4
 
 # Training function
 def train_model(model, dataloader, optimizer, loss_fn, device):
@@ -149,20 +150,58 @@ def evaluate_model(model, dataloader, device):
     
     return predictions, actual_labels
 
+# Load each classifiers
+def load_classifiers(model_dir):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Load emotion classifier
+    tokenizer = BertTokenizer.from_pretrained(f'{model_dir}/BERT_emo_model/')
+
+    with open(f'{model_dir}/BERT_emo_model/label_encoder.pkl', 'rb') as f:
+        le = pickle.load(f)
+
+    with open(f'{model_dir}/BERT_emo_model/metadata.pkl', 'rb') as f:
+        metadata = pickle.load(f)
+    num_classes = metadata['num_classes']
+
+    emo_model = BERTEmotionClassifier(num_classes)
+    emo_model.load_state_dict(torch.load(f'{model_dir}/BERT_emo_model/model_state_dict.pt', map_location=device))
+    emo_model.to(device)
+    emo_model.eval()
+
+    # Load cause classifier
+    tokenizer = BertTokenizer.from_pretrained(f'{model_dir}/BERT_cause_model/')
+
+    cause_model = BERTCauseClassifier()
+    cause_model.load_state_dict(torch.load(f'{model_dir}/BERT_cause_model/model_state_dict.pt', map_location=device))
+    cause_model.to(device)
+    cause_model.eval()
+
+    return emo_model, tokenizer, le, cause_model
 
 if __name__ == "__main__":
-        
-    # Train models
-    print("Training the emotion model...")
-    for epoch in range(epochs):
-        train_loss = train_model(emo_model, emo_train_dataloader, optimizer, loss_fn, device)
-        print(f"Epoch {epoch+1}/{epochs}, Loss: {train_loss:.4f}")
+    
+    # Set this to true if we're gonna train a new model
+    run_train = False
+    if run_train:
+        # Train models
+        print("Training the emotion model...")
+        for epoch in range(epochs):
+            train_loss = train_model(emo_model, emo_train_dataloader, optimizer, loss_fn, device)
+            print(f"Epoch {epoch+1}/{epochs}, Loss: {train_loss:.4f}")
 
-    print("Training the cause model...")
-    for epoch in range(epochs):
-        train_loss = train_model(cause_model, cause_train_dataloader, optimizer, loss_fn, device)
-        print(f"Epoch {epoch+1}/{epochs}, Loss: {train_loss:.4f}")
+        print("Training the cause model...")
+        for epoch in range(epochs):
+            train_loss = train_model(cause_model, cause_train_dataloader, optimizer, loss_fn, device)
+            print(f"Epoch {epoch+1}/{epochs}, Loss: {train_loss:.4f}")
 
+    # Set this to false if we're not going to load a model
+    load_train = True
+    if load_train:
+        # Load the model
+        print("Loading model...")
+        emo_model, tokenizer, le, cause_model = load_classifiers("./saved_models")
+        print("Model loaded successfully!")
     # Evaluate models
     print("\nEvaluating the emotion model...")
     emo_predictions, emo_actual_labels = evaluate_model(emo_model, emo_test_dataloader, device)
@@ -179,33 +218,35 @@ if __name__ == "__main__":
 
 
 
-    # Save Emotion Model
-    print("\nSaving the emotion model...")
-    emo_save_directory = './saved_models/BERT_emo_model'
-    os.makedirs(emo_save_directory, exist_ok=True)
+    # Set this as true if we want to save the model and load it quickly later
+    run_save = False
+    if run_save:
+        # Save Emotion Model
+        print("\nSaving the emotion model...")
+        emo_save_directory = './saved_models/BERT_emo_model'
+        os.makedirs(emo_save_directory, exist_ok=True)
 
-    torch.save(emo_model.state_dict(), f'{emo_save_directory}/model_state_dict.pt')
+        torch.save(emo_model.state_dict(), f'{emo_save_directory}/model_state_dict.pt')
 
-    emo_metadata = {
-        'num_classes': num_classes,
-        'label_encoder_classes': le.classes_
-    }
-    with open(f'{emo_save_directory}/metadata.pkl', 'wb') as f:
-        pickle.dump(emo_metadata, f)
+        emo_metadata = {
+            'num_classes': num_classes,
+            'label_encoder_classes': le.classes_
+        }
+        with open(f'{emo_save_directory}/metadata.pkl', 'wb') as f:
+            pickle.dump(emo_metadata, f)
 
-    with open(f'{emo_save_directory}/label_encoder.pkl', 'wb') as f:
-        pickle.dump(le, f)
+        with open(f'{emo_save_directory}/label_encoder.pkl', 'wb') as f:
+            pickle.dump(le, f)
 
-    tokenizer.save_pretrained(emo_save_directory)
-    print(f"Emotion model saved to '{emo_save_directory}'")
+        tokenizer.save_pretrained(emo_save_directory)
+        print(f"Emotion model saved to '{emo_save_directory}'")
 
-    # Save Cause Model
-    print("\nSaving the cause model...")
-    cause_save_directory = './saved_models/BERT_cause_model'
-    os.makedirs(cause_save_directory, exist_ok=True)
+        # Save Cause Model
+        print("\nSaving the cause model...")
+        cause_save_directory = './saved_models/BERT_cause_model'
+        os.makedirs(cause_save_directory, exist_ok=True)
 
-    torch.save(cause_model.state_dict(), f'{cause_save_directory}/model_state_dict.pt')
+        torch.save(cause_model.state_dict(), f'{cause_save_directory}/model_state_dict.pt')
 
-    # Cause model does not need label encoder
-    tokenizer.save_pretrained(cause_save_directory)
-    print(f"Cause model saved to '{cause_save_directory}'")
+        tokenizer.save_pretrained(cause_save_directory)
+        print(f"Cause model saved to '{cause_save_directory}'")

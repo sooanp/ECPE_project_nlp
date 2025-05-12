@@ -1,13 +1,16 @@
 import torch
 import torch.nn as nn
 from transformers import BertTokenizer
+
+import sys
+sys.path.append('./baseline_models/')
 import pickle
 from b1_model import BERTEmotionClassifier, BERTCauseClassifier
 import itertools
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 import extractor
 from tqdm import tqdm
-import random
+
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -90,7 +93,7 @@ def load_classifiers(model_dir):
 
 # Pair classifier model: This is simply a one-fully connected layer
 class Pairer(nn.Module):
-    def __init__(self, input_dim=1536):
+    def __init__(self, input_dim=1586):
         super(Pairer, self).__init__()
         hidden_dim = 512
         self.input = nn.Linear(input_dim, hidden_dim)
@@ -119,9 +122,9 @@ def prepare_input_and_labels(emo_feats, cause_feats, label_pairs):
     labels = []
     
     for i, j in itertools.product(range(n), range(n)):
-        pair_vec = torch.cat([emo_feats[i], cause_feats[j]], dim=0)
-        # pos_vec = get_pos_embedding(i, j).to(device)
-        # pair_vec = torch.cat([emo_feats[i], cause_feats[j], pos_vec], dim=0)
+
+        pos_vec = get_pos_embedding(i, j).to(device)
+        pair_vec = torch.cat([emo_feats[i], cause_feats[j], pos_vec], dim=0)
 
         pairs.append(pair_vec)
         
@@ -136,18 +139,6 @@ def prepare_input_and_labels(emo_feats, cause_feats, label_pairs):
     
     return x, y
 
-
-def custom_loss(logits, labels, neg_loss_weight):
-    bce = nn.BCEWithLogitsLoss(reduction='none')
-    losses = bce(logits, labels)
-
-    pos_mask = labels == 1
-    neg_mask = labels == 0
-
-    pos_loss = losses[pos_mask].mean() if pos_mask.any() else torch.tensor(0.0, device=logits.device)
-    neg_loss = losses[neg_mask].mean() if neg_mask.any() else torch.tensor(0.0, device=logits.device)
-
-    return pos_loss + neg_loss_weight * neg_loss
 
 
 if __name__ == "__main__":
@@ -268,7 +259,6 @@ if __name__ == "__main__":
             
             preds1 = (probs > 0.5).float()
             
-            # print(probs)
     
         test_results1.append((preds1.cpu(), y.cpu()))
         
