@@ -7,7 +7,7 @@ import itertools
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 import extractor
 from tqdm import tqdm
-import random
+
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -87,7 +87,6 @@ def load_classifiers(model_dir):
     return emo_model, tokenizer, le, cause_model
 
 
-
 # Pair classifier model: This is simply a one-fully connected layer
 class Pairer(nn.Module):
     def __init__(self, input_dim=1536):
@@ -102,13 +101,6 @@ class Pairer(nn.Module):
         x = self.relu(x)
         return self.fc(x)
     
-# pos embedding
-def get_pos_embedding(i, j, dim=50):
-    dist = j - i
-    index = max(0, min(dim - 1, dist + dim // 2))
-    vec = torch.zeros(dim, dtype=torch.float)
-    vec[index] = 1.0
-    return vec
 
 
 # Cartesian product on features
@@ -120,8 +112,6 @@ def prepare_input_and_labels(emo_feats, cause_feats, label_pairs):
     
     for i, j in itertools.product(range(n), range(n)):
         pair_vec = torch.cat([emo_feats[i], cause_feats[j]], dim=0)
-        # pos_vec = get_pos_embedding(i, j).to(device)
-        # pair_vec = torch.cat([emo_feats[i], cause_feats[j], pos_vec], dim=0)
 
         pairs.append(pair_vec)
         
@@ -135,19 +125,6 @@ def prepare_input_and_labels(emo_feats, cause_feats, label_pairs):
     y = torch.tensor(labels).float().unsqueeze(1)
     
     return x, y
-
-
-def custom_loss(logits, labels, neg_loss_weight):
-    bce = nn.BCEWithLogitsLoss(reduction='none')
-    losses = bce(logits, labels)
-
-    pos_mask = labels == 1
-    neg_mask = labels == 0
-
-    pos_loss = losses[pos_mask].mean() if pos_mask.any() else torch.tensor(0.0, device=logits.device)
-    neg_loss = losses[neg_mask].mean() if neg_mask.any() else torch.tensor(0.0, device=logits.device)
-
-    return pos_loss + neg_loss_weight * neg_loss
 
 
 if __name__ == "__main__":

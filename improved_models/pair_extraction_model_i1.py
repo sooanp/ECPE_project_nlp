@@ -215,7 +215,7 @@ if __name__ == "__main__":
 
     
     num_pos = 3
-    num_neg = 30
+    num_neg = 25
     pos_weight_val = num_neg / (num_pos)
     pos_weight = torch.tensor([pos_weight_val], device=device)
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
